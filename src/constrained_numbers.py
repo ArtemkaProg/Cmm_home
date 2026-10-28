@@ -57,7 +57,7 @@ def number_token_ok(partial: str, token: str, terminator: str) -> bool:
 
 def string_token_ok(partial: str, token: str, terminator: str) -> bool:
     if token == terminator:
-        return (partial + token).isalpha()
+        return len(partial) > 0
     return (partial + token).isalpha()
 
 
@@ -196,7 +196,9 @@ class FunctionCaller:
             if kind == "number":
                 self.generate_number(ids, "}" if last else ",")
             elif kind == "string":
-                self.generate_string(ids, "}" if last else ",")
+                self._append_text(ids, '"')
+                self.generate_string(ids, '"')
+                self._append_text(ids, '"')
             else:
                 raise NotImplementedError(
                     f"type {kind!r} of parameter {key!r} not supported yet"
@@ -214,7 +216,16 @@ class FunctionCaller:
         self.generate_parameters(ids, name)
         self._append_text(ids, "}}")
         generated = self.model.decode(ids[start:])
-        call = json.loads(generated)  # always valid: we built it ourselves
+
+        try:
+            call = json.loads(generated)
+        except json.JSONDecodeError as error:
+            print("\nINVALID JSON:")
+            print(repr(generated))
+            print("\nERROR POSITION:")
+            print(repr(generated[max(0, error.pos - 30):error.pos + 30]))
+            raise
+
         return {
             "prompt": prompt,
             "name": call["name"],
