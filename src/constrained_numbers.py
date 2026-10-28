@@ -55,10 +55,24 @@ def number_token_ok(partial: str, token: str, terminator: str) -> bool:
     return is_number_prefix(partial + token)
 
 
-def string_token_ok(partial: str, token: str, terminator: str) -> bool:
+def string_token_ok(
+    partial: str, token: str, terminator: str
+) -> bool:
     if token == terminator:
-        return len(partial) > 0
-    return (partial + token).isalpha()
+        return True
+
+    candidate = partial + token
+
+    if len(candidate) > 200:
+        return False
+
+    if any(ord(char) < 32 for char in token):
+        return False
+
+    if '"' in token or "\\" in token:
+        return False
+
+    return True
 
 
 def build_prompt(functions: list[dict[str, Any]], user_prompt: str) -> str:
@@ -113,8 +127,8 @@ class FunctionCaller:
         ) as file:
             vocab: dict[str, int] = json.load(file)
         return {
-            token_id: token.replace("Ġ", " ").replace("Ċ", "\n")
-            for token, token_id in vocab.items()
+            token_id: self.model.decode([token_id])
+            for token_id in vocab.values()
         }
 
     def _append_text(self, ids: list[int], text: str) -> None:
@@ -135,6 +149,9 @@ class FunctionCaller:
         for token_id in np.argsort(-logits):
             text = self.pvocab.get(int(token_id))
             if text and is_valid(text):
+                actual = self.model.decode([int(token_id)])
+                if text != actual:
+                    print("TOKEN MISMATCH:", repr(text), repr(actual))
                 return int(token_id)
         raise RuntimeError("No valid token found at this step")
 
@@ -170,18 +187,33 @@ class FunctionCaller:
 
     def generate_string(self, ids: list[int], terminator: str) -> str:
         string = ""
-        while True:
-            if len(string) >= MAX_NUMBER_LEN and string.isalpha():
+        max_length = 100
+        max_tokens = 60
+
+        for _ in range(max_tokens):
+            if len(string) >= max_length:
                 break
+
             token_id = self._pick_token(
-                ids, lambda tok: string_token_ok(string, tok, terminator)
+                ids,
+                lambda tok: string_token_ok(string, tok, terminator)
+                and (
+                    tok == terminator
+                    or len(string + tok) <= max_length
+                )
             )
+
             token = self.pvocab[token_id]
+
             if token == terminator:
-                break
+                return string
+
             string += token
             ids.append(token_id)
-        return string
+
+        raise RuntimeError(
+            f"String generation did not terminate: {string!r}"
+        )
 
     def generate_parameters(self, ids: list[int], name: str) -> None:
         """Write all parameters of function name after '"parameters": {'."""
